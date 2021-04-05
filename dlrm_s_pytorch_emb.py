@@ -463,21 +463,23 @@ class DLRM_Net(nn.Module):
                     #print(V)
                     # step 1: slice V tensor with offset(length)
                     # consider mini-batch size?
+                    print('----- V tensor --------')
+                    print(V.detach().cpu().numpy())
                     _V = []
                     print("sparse_offset_group_batch")
                     print(sparse_offset_group_batch)
                     for i in range(1, len(sparse_offset_group_batch)+1):
                         
-                        print(i)
+                        print('i:', i)
                         if i == len(sparse_offset_group_batch):
-                            tempV = V[i:]
+                            tempV = V[sparse_offset_group_batch[i-1]:]
                         else:
-                            tempV = V[ : sparse_offset_group_batch[i]]
-                        # print('tempV')
-                        # print(tempV)
+                            tempV = V[: sparse_offset_group_batch[i]]
+                        print('tempV')
+                        print(tempV)
                         #torch.cat(_V, torch.sum(tempV, dim=0))
                         _V.append(torch.sum(tempV, dim=0))
-                        print(_V)
+                        print("_V:", _V)
                         #torch.stack((_V, torch.sum(tempV, dim=1)), dim=1)
                         # _V.cat(torch.sum(tempV, dim=1))
                         #print('-----_V------')
@@ -487,7 +489,7 @@ class DLRM_Net(nn.Module):
                                    
 
                     # print("V's dimension: ", V.detach().cpu().numpy().shape)
-                    print('----- V tensor --------')
+                    print('-----after add V tensor --------')
                     print(V.detach().cpu().numpy())
                     
                     
