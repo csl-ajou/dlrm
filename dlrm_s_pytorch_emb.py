@@ -61,7 +61,7 @@ import datetime
 import json
 import sys
 import time
-
+import timeit
 # onnx
 # The onnx import causes deprecation warnings every time workers
 # are spawned during testing. So, we filter out those warnings.
@@ -196,6 +196,10 @@ class DLRM_Net(nn.Module):
     def create_mlp(self, ln, sigmoid_layer):
         # build MLP layer by layer
         layers = nn.ModuleList()
+        # nn.ModuleList()의 역할
+        # 각 레이어를 리스트에 전달하고 레이어의 iterator를 만든다
+        # forward 처리를 간단하게 할 수 있다
+
         for i in range(0, ln.size - 1):
             n = ln[i]
             m = ln[i + 1]
@@ -234,6 +238,9 @@ class DLRM_Net(nn.Module):
         return torch.nn.Sequential(*layers)
 
     def create_emb(self, m, ln, weighted_pooling=None):
+        print('create_emb start!')
+        print('m:', m, ' ln:', ln)
+
         emb_l = nn.ModuleList()
         v_W_l = []
         for i in range(0, ln.size):
@@ -265,11 +272,15 @@ class DLRM_Net(nn.Module):
                 EE = nn.Embedding(n, m, sparse=True)
                 # initialize embeddings
                 # nn.init.uniform_(EE.weight, a=-np.sqrt(1 / n), b=np.sqrt(1 / n))
+                #print(list(EE.parameters()))
                 W = np.random.uniform(
                     low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
                 ).astype(np.float32)
                 # approach 1
+                #print(EE.weight.data)
                 EE.weight.data = torch.tensor(W, requires_grad=True)
+                #print(EE.weight.data)
+                #print((EE.weight.data.nelement() * EE.weight.data.element_size() * ln.size)/(1024**3))
                 # approach 2
                 # EE.weight.data.copy_(torch.tensor(W))
                 # approach 3
@@ -279,6 +290,10 @@ class DLRM_Net(nn.Module):
             else:
                 v_W_l.append(torch.ones(n, dtype=torch.float32))
             emb_l.append(EE)
+        print('nelement:', EE.weight.data.nelement())
+        print('element_size:', EE.weight.data.element_size())
+        print('ln.size:', ln.size)
+        print((EE.weight.data.nelement() * EE.weight.data.element_size()*ln.size)/(1024**3))
         return emb_l, v_W_l
 
     def __init__(
@@ -398,23 +413,23 @@ class DLRM_Net(nn.Module):
         #   corresponding to a single lookup
         # 2. for each embedding the lookups are further organized into a batch
         # 3. for a list of embedding tables there is a list of batched lookups
-
+        
         ly = []
         for k, sparse_index_group_batch in enumerate(lS_i):
             sparse_offset_group_batch = lS_o[k]
-            
+
             # embedding lookup
             # We are using EmbeddingBag, which implicitly uses sum operator.
             # The embeddings are represented as tall matrices, with sum
             # happening vertically across 0 axis, resulting in a row vector
             # E = emb_l[k]
 
-            print('sparse_index_group_batch dim:', sparse_index_group_batch.detach().cpu().numpy().shape)
-            print('sparse_offset_group_batch dim:', sparse_offset_group_batch.detach().cpu().numpy().shape)
             if v_W_l[k] is not None:
                 per_sample_weights = v_W_l[k].gather(0, sparse_index_group_batch)
-            else:
+                print('if')
+            else: #this one
                 per_sample_weights = None
+                print('else: per_sample_weights => none')
 
             if self.quantize_emb:
                 s1 = self.emb_l_q[k].element_size() * self.emb_l_q[k].nelement()
@@ -438,26 +453,49 @@ class DLRM_Net(nn.Module):
 
                 ly.append(QV)
             else:
-                E = emb_l[k]
-                print("E's dimension: ", E.weight.detach().cpu().numpy().shape)
-                V = E(
-                    sparse_index_group_batch
-                    # sparse_offset_group_batch
-                )
-                print("after def V", V.detach().cpu().numpy().shape)
-                V = torch.sum(V, dim=1) #this code makes error 
-                #V = V.sum(1)
-                print("after sum V", V.detach().cpu().numpy().shape)
-                # print("V's dimension: ", V.detach().cpu().numpy().shape)
-                ly.append(V)
-                print("middle ly", ly)
-        #ly = 0
-        #print(ly)
-        # for k in ly:
-        #     _ly = _ly + torch.sum(k)
+                with record_function("DLRM embedding forward"):
+                    E = emb_l[k]
+                    print("K:", k)
+                    # print(E)
+                    V = E(
+                        sparse_index_group_batch
+                    )
+                    #print(V)
+                    # step 1: slice V tensor with offset(length)
+                    # consider mini-batch size?
+                    _V = []
+                    print("sparse_offset_group_batch")
+                    print(sparse_offset_group_batch)
+                    for i in range(1, len(sparse_offset_group_batch)+1):
+                        
+                        print(i)
+                        if i == len(sparse_offset_group_batch):
+                            tempV = V[i:]
+                        else:
+                            tempV = V[ : sparse_offset_group_batch[i]]
+                        # print('tempV')
+                        # print(tempV)
+                        #torch.cat(_V, torch.sum(tempV, dim=0))
+                        _V.append(torch.sum(tempV, dim=0))
+                        print(_V)
+                        #torch.stack((_V, torch.sum(tempV, dim=1)), dim=1)
+                        # _V.cat(torch.sum(tempV, dim=1))
+                        #print('-----_V------')
+                        #print(_V.detach().cpu().numpy())     
+                    _V = torch.stack(_V)
+                    V=_V
+                                   
 
-        # #ly.sum(1)
-        # print(_ly)
+                    # print("V's dimension: ", V.detach().cpu().numpy().shape)
+                    print('----- V tensor --------')
+                    print(V.detach().cpu().numpy())
+                    
+                    
+
+                ly.append(V)
+                
+        print("--ly: ",ly)
+        print("end")
         return ly
 
     #  using quantizing functions from caffe2/aten/src/ATen/native/quantized/cpu
@@ -491,10 +529,6 @@ class DLRM_Net(nn.Module):
             # append dense feature with the interactions (into a row vector)
             # approach 1: all
             # Zflat = Z.view((batch_size, -1))
-            # approach 2: unique
-            _, ni, nj = Z.shape
-            # approach 2: unique
-            _, ni, nj = Z.shape
             # approach 2: unique
             _, ni, nj = Z.shape
             # approach 1: tril_indices
@@ -531,6 +565,7 @@ class DLRM_Net(nn.Module):
             return self.parallel_forward(dense_x, lS_o, lS_i)
 
     def distributed_forward(self, dense_x, lS_o, lS_i):
+        print('distributed_forward')
         batch_size = dense_x.size()[0]
         # WARNING: # of ranks must be <= batch size in distributed_forward call
         if batch_size < ext_dist.my_size:
@@ -590,40 +625,105 @@ class DLRM_Net(nn.Module):
         return z
 
     def sequential_forward(self, dense_x, lS_o, lS_i):
-        # process dense features (using bottom mlp), resulting in a row vector
-        print("--------apply_mlp-------")
-        x = self.apply_mlp(dense_x, self.bot_l)
-        # debug prints
-        print("intermediate")
-        _x = x.detach().cpu().numpy()
-        print(_x)
-        print("dimension: ", _x.shape)
+        with torch.autograd.profiler.profile() as prof:
+            #use_cuda=True, 
+            print('sequential_forward')
+            # process dense features (using bottom mlp), resulting in a row vector
+            
+            #start = timeit.default_timer()
+            with torch.autograd.profiler.record_function("apply_mlp_bot"):
+                x = self.apply_mlp(dense_x, self.bot_l)
+            #end = timeit.default_timer()
+            #print(end-start)
+            # debug prints
+            print("intermediate")
+            _x = x.detach().cpu().numpy()
+            print(_x)
+            print("dimension: ", _x.shape)
 
-        # process sparse features(using embeddings), resulting in a list of row vectors
-        print("-----apply emb------")
-        ly = self.apply_emb(lS_o, lS_i, self.emb_l, self.v_W_l)
-        for y in ly:
-            _y = y.detach().cpu().numpy()
-            print(_y)
-            print("dimension: ", _y.shape)
-            #print(torch.Size(ly))
-        # interact features (dense and sparse)
+            
+            #start = timeit.default_timer()
+            print("--------apply_emb---------")
+            with torch.autograd.profiler.record_function("apply_emb"):
+                ly = self.apply_emb(lS_o, lS_i, self.emb_l, self.v_W_l)
+            
+            #end = timeit.default_timer()
+            #print(end-start)
+            # print("----------ly----------")
+            
+            # for y in ly:
+            #     _y = y.detach().cpu().numpy()
+            #     print(_y)
+            #     print("dimension of y: ", _y.shape)
 
-        z = self.interact_features(x, ly)
-        # print(z.detach().cpu().numpy())
+            # interact features (dense and sparse)
+            #start = timeit.default_timer()
+            with torch.autograd.profiler.record_function("interact_features"):
+                z = self.interact_features(x, ly)
+            print("### z : interact_features")
+            #end = timeit.default_timer()
+            #print(end-start)
+            print(z.detach().cpu().numpy())
 
-        # obtain probability of a click (using top mlp)
-        p = self.apply_mlp(z, self.top_l)
+            # obtain probability of a click (using top mlp)
+            #start = timeit.default_timer()
+            with torch.autograd.profiler.record_function("apply_mlp_top"):
+                p = self.apply_mlp(z, self.top_l)
+            #end = timeit.default_timer()
+            #print(end-start)
 
-        # clamp output if needed
-        if 0.0 < self.loss_threshold and self.loss_threshold < 1.0:
-            z = torch.clamp(p, min=self.loss_threshold, max=(1.0 - self.loss_threshold))
-        else:
-            z = p
+            # clamp output if needed
+            if 0.0 < self.loss_threshold and self.loss_threshold < 1.0:
+                z = torch.clamp(p, min=self.loss_threshold, max=(1.0 - self.loss_threshold))
+            else:
+                z = p
+        print("------------forward--------------")
+        #print(prof.key_averages().table(row_limit=1000))
 
         return z
 
+        # print('sequential_forward')
+        # # process dense features (using bottom mlp), resulting in a row vector
+        
+        # start = timeit.default_timer() 
+        # x = self.apply_mlp(dense_x, self.bot_l)
+        # end = timeit.default_timer()
+        # print("apply_mlp_time:",end-start)
+        # # debug prints
+        # # print("intermediate")
+        # # print(x.detach().cpu().numpy())
+
+        # # process sparse features(using embeddings), resulting in a list of row vectors
+        # start = timeit.default_timer()
+        # ly = self.apply_emb(lS_o, lS_i, self.emb_l, self.v_W_l)
+        # end = timeit.default_timer()
+        # print("apply_emb_time:",end-start)
+        # # for y in ly:
+        # #     print(y.detach().cpu().numpy())
+
+        # # interact features (dense and sparse)
+        # start = timeit.default_timer()
+        # z = self.interact_features(x, ly)
+        # end = timeit.default_timer()
+        # print("interact_features_time:",end-start)
+        # # print(z.detach().cpu().numpy())
+
+        # # obtain probability of a click (using top mlp)
+        # start = timeit.default_timer()
+        # p = self.apply_mlp(z, self.top_l)
+        # end = timeit.default_timer()
+        # print("apply_mlp_time:",end-start)
+
+        # # clamp output if needed
+        # if 0.0 < self.loss_threshold and self.loss_threshold < 1.0:
+        #     z = torch.clamp(p, min=self.loss_threshold, max=(1.0 - self.loss_threshold))
+        # else:
+        #     z = p
+
+        # return z
+
     def parallel_forward(self, dense_x, lS_o, lS_i):
+        print('parallel_forward')
         ### prepare model (overwrite) ###
         # WARNING: # of devices must be >= batch size in parallel_forward call
         batch_size = dense_x.size()[0]
@@ -1022,8 +1122,6 @@ def run():
     parser.add_argument("--mlperf-auc-threshold", type=float, default=0.0)
     parser.add_argument("--mlperf-bin-loader", action="store_true", default=False)
     parser.add_argument("--mlperf-bin-shuffle", action="store_true", default=False)
-    # mlperf gradient accumulation iterations
-    parser.add_argument("--mlperf-grad-accum-iter", type=int, default=1)
     # LR policy
     parser.add_argument("--lr-num-warmup-steps", type=int, default=0)
     parser.add_argument("--lr-decay-start-step", type=int, default=0)
@@ -1047,6 +1145,10 @@ def run():
         if args.md_flag:
             sys.exit("ERROR: mixed dimensions with weighted pooling is not supported")
     if args.quantize_emb_with_bit in [4, 8]:
+        if args.cluster_flag:
+            sys.exit(
+                "ERROR: 4 and 8-bit quantization with set cluster_flag is not supported"
+            )
         if args.qr_flag:
             sys.exit(
                 "ERROR: 4 and 8-bit quantization with quotient remainder is not supported"
@@ -1054,6 +1156,10 @@ def run():
         if args.md_flag:
             sys.exit(
                 "ERROR: 4 and 8-bit quantization with mixed dimensions is not supported"
+            )
+        if args.hype_flag:
+            sys.exit(
+                "ERROR: 4 and 8-bit quantization with hyperbolic embeddings is not supported"
             )
 
     ### some basic setup ###
@@ -1240,14 +1346,20 @@ def run():
         print("data (inputs and targets):")
         for j, inputBatch in enumerate(train_ld):
             X, lS_o, lS_i, T, W, CBPP = unpack_batch(inputBatch)
+            print('CBPP: ', CBPP)
+            print('lS_o:', lS_o)
+            print('lS_i:', lS_i)
+            
 
             torch.set_printoptions(precision=4)
             # early exit if nbatches was set by the user and has been exceeded
             if nbatches > 0 and j >= nbatches:
                 break
+            print("------------------------------")
             print("mini-batch: %d" % j)
             print(X.detach().cpu())
             # transform offsets to lengths when printing
+            print("1")
             print(
                 torch.IntTensor(
                     [
@@ -1258,9 +1370,10 @@ def run():
                     ]
                 )
             )
+            print("2")
             print([S_i.detach().cpu() for S_i in lS_i])
             print(T.detach().cpu())
-
+            print('W: ', W.detach().cpu())
     global ndevices
     ndevices = min(ngpus, args.mini_batch_size, num_fea - 1) if use_gpu else -1
 
@@ -1527,6 +1640,7 @@ def run():
                 if args.mlperf_logging:
                     previous_iteration_time = None
 
+                print("train_ld", train_ld)
                 for j, inputBatch in enumerate(train_ld):
                     if j == 0 and args.save_onnx:
                         X_onnx, lS_o_onnx, lS_i_onnx, _, _, _ = unpack_batch(inputBatch)
@@ -1591,18 +1705,61 @@ def run():
                     # A = np.sum((np.round(S, 0) == T).astype(np.uint8))
                     # A_shifted = np.sum((np.round(S_shifted, 0) == T).astype(np.uint8))
 
-                    with record_function("DLRM backward"):
-                        # scaled error gradient propagation
-                        # (where we do not accumulate gradients across mini-batches)
-                        if (args.mlperf_logging and (j + 1) % args.mlperf_grad_accum_iter == 0) or not args.mlperf_logging:
-                            optimizer.zero_grad()
-                        # backward pass
-                        E.backward()
+                    # with record_function("DLRM backward"):
+                       
+                    #     start = timeit.default_timer()
+                    #     # scaled error gradient propagation
+                    #     # (where we do not accumulate gradients across mini-batches)
+                    #     optimizer.zero_grad()
+                    #     # backward pass
+                        
+                    #     E.backward()
+                        
+                        
+                    #     # optimizer
+                    #     optimizer.step()
+                    #     lr_scheduler.step()
+                    #     end = timeit.default_timer()
+                    #     print(end-start)
+                        
+                    # ################ without profiler ################ 
+                    # with record_function("DLRM backward"):
+                       
+                    #     optimizer.zero_grad()
+                    #     # backward pass
+                           
+                    #     E.backward()
+                            
+                            
+                    #         # optimizer
+                    #     optimizer.step()
+                    #     lr_scheduler.step()
+                       
+                        
 
-                        # optimizer
-                        if (args.mlperf_logging and (j + 1) % args.mlperf_grad_accum_iter == 0) or not args.mlperf_logging:
-                            optimizer.step()
-                            lr_scheduler.step()
+
+                    
+                    start = timeit.default_timer()
+                        
+                            #use_cuda=True, 
+                            #
+                            # scaled error gradient propagation
+                            # (where we do not accumulate gradients across mini-batches)
+                            
+                    optimizer.zero_grad()
+                            # backward pass
+                    with record_function("DLRM backward"):
+                        with torch.autograd.profiler.profile() as prof:        
+                            with torch.autograd.profiler.record_function("backward"):
+                                E.backward()
+                            
+                    #print(prof.key_averages().table())        
+                            # optimizer
+                    optimizer.step()
+                    lr_scheduler.step()
+                    end = timeit.default_timer()
+                    #print(end-start)
+                        
 
                     if args.mlperf_logging:
                         total_time += iteration_time
@@ -1647,7 +1804,7 @@ def run():
                             + wall_time,
                             flush=True,
                         )
-
+                        print("--------------------------------------------")
                         log_iter = nbatches * k + j + 1
                         writer.add_scalar("Train/Loss", train_loss, log_iter)
 
@@ -1691,7 +1848,6 @@ def run():
                             model_metrics_dict["epoch"] = k
                             model_metrics_dict["iter"] = j + 1
                             model_metrics_dict["train_loss"] = train_loss
-                            model_metrics_dict["total_loss"] = total_loss
                             model_metrics_dict[
                                 "opt_state_dict"
                             ] = optimizer.state_dict()
@@ -1875,6 +2031,10 @@ def run():
             (X_onnx, lS_o_onnx, lS_i_onnx),
             dlrm_pytorch_onnx_file,
             verbose=True,
+            use_external_data_format=True,
+            opset_version=11,
+            input_names=all_inputs,
+            output_names=["pred"],
             dynamic_axes=dynamic_axes,
         )
         # recover the model back
@@ -1885,4 +2045,8 @@ def run():
 
 
 if __name__ == "__main__":
+    #print(__name__)
+    start = timeit.default_timer()
     run()
+    end = timeit.default_timer()
+    print(end-start)
