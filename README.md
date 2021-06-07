@@ -1,3 +1,9 @@
+# 21-1 자기주도프로젝트
+* Edited DLRM code to use CPU and GPU collaborating techniques
+  * dlrm_s_pytorch.py : original DRLM code
+  * dlrm_s_pytorch_hybrid.py : Process(Lookup, Reduction) Embedding table in CPU, remaining works are done using GPU
+  * dlrm_s_pytorch_hybrid2.py : Use Nvidia Cuda host alloc
+  
 Deep Learning Recommendation Model for Personalization and Recommendation Systems:
 =================================================================================
 *Copyright (c) Facebook, Inc. and its affiliates.*
