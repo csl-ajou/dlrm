@@ -1,6 +1,7 @@
 # 21-1 자기주도프로젝트
 * Edited DLRM code to use CPU and GPU collaborating techniques
   * **dlrm_s_pytorch.py** : original DRLM code
+  * **dlrm_s_pytorch_emb.py** : Embedding table lookup and reduction are separated in this code => used to check time of lookup and reduction
   * **dlrm_s_pytorch_hybrid.py** : Process(Lookup, Reduction) Embedding table in CPU, remaining works are done using GPU (**hyb1** in the graph)  
   * **dlrm_s_pytorch_hybrid2.py** : Use Nvidia Cuda host alloc(**hyb2** in the graph)
   
