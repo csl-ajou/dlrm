@@ -15,7 +15,7 @@ If you want to use **GPU**, you have to add *--use-gpu*.
 To use ***UVM***, you have to install *pytorch* in csl-ajou repo. Executing UVM mode needs USE_UVM=1 flag.  
 To execute ***dlrm_s_pytorch_hybrid2.py***, you have to install *DeepPlanTorch* in csl-ajou repo.  
 
-
+---
   
 Deep Learning Recommendation Model for Personalization and Recommendation Systems:
 =================================================================================
