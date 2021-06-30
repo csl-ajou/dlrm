@@ -4,6 +4,9 @@
   * **dlrm_s_pytorch_emb.py** : Embedding table lookup and reduction are separated in this code => used to check time of lookup and reduction
   * **dlrm_s_pytorch_hybrid.py** : Process(Lookup, Reduction) Embedding table in CPU, remaining works are done using GPU (**hyb1** in the graph)  
   * **dlrm_s_pytorch_hybrid2.py** : Use Nvidia Cuda host alloc(**hyb2** in the graph)
+ * Configuration for each model(RM1, RM2, RM3) is in script folder
+  * 6 modes in each file (CPU, GPU, EMB, UVM, hyb1, hyb2)
+  * Please uncomment the code section which you want to execute. 
   
 Deep Learning Recommendation Model for Personalization and Recommendation Systems:
 =================================================================================
